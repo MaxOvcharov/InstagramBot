@@ -1,6 +1,10 @@
 from instabot import InstaBot
 
+<<<<<<< HEAD
 bot = InstaBot(login="LOGIN", password="PASSWORD",
+=======
+bot = InstaBot(login="USER_LOGIN", password="PASSWORD",
+>>>>>>> 407b4f6ce938105e0587c6d0931277ab445520a4
                like_per_day=500,
                media_max_like=100,
                media_min_like=5,
