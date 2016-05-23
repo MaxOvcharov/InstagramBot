@@ -57,10 +57,18 @@ class InstaBot:
 
     # All counter.
     like_counter = 0
+    like_counter_per_hour = 0
+
     follow_counter = 0
+    follow_counter_per_hour = 0
+
     unfollow_counter = 0
+    unfollow_counter_per_hour = 0
     unfol_counter = 0
+
     comments_counter = 0
+    comments_counter_per_hour = 0
+
 
     # Log setting.
     log_file_path = '/var/www/python/log/'
@@ -74,36 +82,39 @@ class InstaBot:
     next_iteration = {"Like": 0, "Follow": 0, "Unfollow": 0, "Comments": 0}
 
     def __init__(self, login, password,
-                like_per_day=500,
+                like_per_day=150,
                 media_max_like=100,
                 media_min_like=5,
-                follow_per_day=10,
-                follow_time=5*60*60,
-                unfollow_per_day=10,
-                comments_per_day=40,
-                tag_list=["photooftheday","beautiful","instadaily","follow","bestoftheday","followme","like","nature","repost","clouds","followback","likeforlike", "forest", "wood", "travel", "mountains", "mountain", "russia", "like4like", "follow4followback"],
+                follow_per_day=0,
+                follow_time=2*60,
+                unfollow_per_day=0,
+                comments_per_day=0,
                 max_like_for_one_tag = 5,
+                my_friends = [],
+                tag_list=["photooftheday","beautiful","instadaily","follow","bestoftheday","followme","like","nature","repost","clouds","followback","likeforlike", "forest", "wood", "travel", "mountains", "mountain", "russia", "like4like", "follow4followback"],
                 log_mod = 0):
 
-        self.time_in_day = 5*60*60
+        self.hour = 5
+        self.time_in_day = self.hour*60*60
 
 
-        # Like
+        # Like (every like equivalent == max 5 like per user) 
         self.like_per_day = like_per_day
         if self.like_per_day != 0:
             self.like_delay = self.time_in_day / self.like_per_day
 
-        # Follow
+        # Follow (if time_in_day = 5*60*60 follow_count = 30, but )
         self.follow_time = follow_time
         self.follow_per_day = follow_per_day
         if self.follow_per_day != 0:
             self.follow_delay = self.time_in_day / self.follow_per_day
 
-        # Unfollow
-        self.time_in_day_for_unfollow = 1*60*60
+        # Unfollow 
         self.unfollow_per_day = unfollow_per_day
+        # List of friends that don't unfollow
+        self.my_friends = my_friends
         if self.unfollow_per_day != 0:
-            self.unfollow_delay = self.time_in_day_for_unfollow / self.unfollow_per_day
+            self.unfollow_delay = self.time_in_day / self.unfollow_per_day
 
         # Comment
         self.comments_per_day = comments_per_day
@@ -130,8 +141,12 @@ class InstaBot:
         self.user_password = password
 
         self.media_by_tag = []
-
+        # Preview vertion of bot and time start for stat_per_hour        
         now_time = datetime.datetime.now()
+        # Print stat every 1 hour
+        self.hours_count = 1
+        self.stat_per_hour = time.time()  + 3600
+
         log_string = 'Insta Bot v1.0 start at %s:' %\
                      (now_time.strftime("%d.%m.%Y %H:%M"))
         self.write_log(log_string)
@@ -141,14 +156,6 @@ class InstaBot:
         atexit.register(self.cleanup)
 
     def cleanup (self):
-        # Unfollow all bot follow
-        if len(self.bot_follow_list)>0:
-            for f in self.bot_follow_list:
-                log_string = "Try to unfollow: %s" % (f[0])
-                self.write_log(log_string)
-                self.unfollow(f[0])
-                self.bot_follow_list.remove(f)
-
         # Logout
         if (self.login_status):
             self.logout()
@@ -200,17 +207,19 @@ class InstaBot:
             self.write_log('Login error! Connenction error!')
 
         # Get your information about following, followers, unfollowing_list_id  
-        #pdb.set_trace()
         self.g.search_user(user_name = self.user_login)
+        self.user_my_id = self.g.user_id
         self.g.get_followers()
         self.g.get_following()
+        #self.list_media_id = self.g.like_user(user_name_for_like= )
 
         # List of user_id, that bot followed previously, but they didn't that
-        self.bot_follow_list = self.g.get_stat()
+        self.bot_follow_list = self.g.get_stat(my_friends = self.my_friends)
         self.count_of_unfollow_id = len(self.bot_follow_list) 
         
 
     def logout(self):
+        #pdb.set_trace()
         now_time = datetime.datetime.now()
         log_string = 'Logout: likes - %i, follow - %i, unfollow - %i, comments - %i.' %\
                      (self.like_counter, self.follow_counter,
@@ -260,33 +269,40 @@ class InstaBot:
 
     def like_all_exist_media (self, media_size=-1, delay=True):
         """ Like all media ID that have self.media_by_tag """
-
+        
         if (self.login_status):
             if self.media_by_tag != 0:
                 i=0
                 for d in self.media_by_tag:
                     # Media count by this tag.
-                    if media_size > 0 or media_size < 0:
+                    if (media_size > 0 or media_size < 0) and self.media_by_tag[i]['owner']['id'] != self.user_my_id:
                         media_size -= 1
                         l_c = self.media_by_tag[i]['likes']['count']
+
                         if ((l_c<=self.media_max_like and l_c>=self.media_min_like)
                             or (self.media_max_like==0 and l_c>=self.media_min_like)
                             or (self.media_min_like==0 and l_c<=self.media_max_like)
                             or (self.media_min_like==0 and self.media_max_like==0)):
-                            log_string = "Try to like media: %s" %\
-                                         (self.media_by_tag[i]['id'])
+                            # Find user id for like 3 times
+                            owner_id = self.media_by_tag[i]['owner']['id']
+                            # searching user_name by user_id
+                            self.g.search_user(user_id = owner_id)
+                            # get all media_id of this user_name for like
+                            self.list_media_id = self.g.like_user(user_name_for_like= self.g.user_name)
+                            log_string = "Try to like user: %s" % (self.g.user_name)
                             self.write_log(log_string)
-                            like = self.like(self.media_by_tag[i]['id'])
-                            # comment = self.comment(self.media_by_tag[i]['id'], 'Cool!')
-                            # follow = self.follow(self.media_by_tag[i]["owner"]["id"])
+                            # like user 3 times
+                            like = self.like(self.list_media_id)
+                            # than follow to user
+                            follow = self.follow(owner_id)
+                            # than comment same user shots
+                            self.list_media_id = []                                                       
                             if like != 0:
                                 if like.status_code == 200:
                                     # Like, all ok!
                                     self.error_400 = 0
-                                    self.like_counter += 1
                                     log_string = "Liked: %s. Like #%i." %\
-                                                 (self.media_by_tag[i]['id'],
-                                                  self.like_counter)
+                                                 (self.g.user_name, self.like_counter)
                                     self.write_log(log_string)
                                 elif like.status_code == 400:
                                     log_string = "Not liked: %i" \
@@ -304,7 +320,7 @@ class InstaBot:
                                     self.write_log(log_string)
                                     return False
                                     # Some error.
-                                i += 1
+                                i += 1                                
                                 if delay:
                                     time.sleep(self.like_delay*0.9 +
                                            self.like_delay*0.2*random.random())
@@ -314,21 +330,38 @@ class InstaBot:
                                 return False
                         else:
                             return False
-                    else:
+                    else: 
+                        self.media_by_tag = []
                         return False
             else:
                 self.write_log("No media to like!")
 
-    def like(self, media_id):
+    def like(self, list_media_id):
         """ Send http request to like media by ID """
+        #pdb.set_trace()
         if (self.login_status):
-            url_likes = self.url_likes % (media_id)
-            try:
-                like = self.s.post(url_likes)
-                last_liked_media_id = media_id
-            except:
-                self.write_log("Exept on like!")
-                like = 0
+            like_count = 0
+            lst_media_id = []
+            n = random.randint(3, 5)
+            # like user 3 times
+            while like_count < n:
+                media_id = random.choice(list_media_id)
+                lst_media_id.append(media_id)
+                url_likes = self.url_likes % (media_id)
+                try:
+                    like = self.s.post(url_likes)
+                    last_liked_media_id = media_id
+                    time.sleep(random.randint(5, 9))
+                except:
+                    self.write_log("Exept on like!")
+                    like = 0
+                like_count += 1
+                self.like_counter += 1
+                self.like_counter_per_hour += 1
+            # random comment one of 3 media ids
+            media_id = random.choice(lst_media_id)  
+            self.comment(media_id, self.generate_comment())
+            time.sleep(random.randint(6, 10))
             return like
 
     def unlike(self, media_id):
@@ -351,22 +384,26 @@ class InstaBot:
                 comment = self.s.post(url_comment, data=comment_post)
                 if comment.status_code == 200:
                     self.comments_counter += 1
-                    log_string = 'Write: "%s". #%i.' % (comment_text, self.comments_counter)
+                    self.comments_counter_per_hour += 1
+                    log_string = 'Write: "%s". to USER: %s on Pic: %s. #%i. ' % (comment_text, self.g.user_name, media_id, self.comments_counter)
                     self.write_log(log_string)
                 return comment
             except:
                 self.write_log("Exept on comment!")
         return False
 
-    def follow(self, user_id):
+    def follow(self, user_id1):
         """ Send http request to follow """
         if (self.login_status):
-            url_follow = self.url_follow % (user_id)
+            url_follow = self.url_follow % (user_id1)
             try:
                 follow = self.s.post(url_follow)
                 if follow.status_code == 200:
                     self.follow_counter += 1
-                    log_string = "Follow: %s #%i." % (user_id, self.follow_counter)
+                    self.follow_counter_per_hour +=1
+                    if self.g.user_name == self.user_login:
+                        self.g.search_user(user_id = user_id1)
+                    log_string = "Follow: %s #%i." % (self.g.user_name, self.follow_counter)
                     self.write_log(log_string)
                 return follow
             except:
@@ -377,10 +414,13 @@ class InstaBot:
         """ Send http request to unfollow """
         if (self.login_status):
             url_unfollow = self.url_unfollow % (user_id)
+            time.sleep(random.randint(1, 5))
             try:
                 unfollow = self.s.post(url_unfollow)
                 if unfollow.status_code == 200:
                     self.unfollow_counter += 1
+                    self.unfollow_counter_per_hour +=1
+
                     log_string = "Unfollow: %s #%i." % (user_id, self.unfollow_counter)
                     self.write_log(log_string)
                 return unfollow
@@ -399,27 +439,50 @@ class InstaBot:
 
     def new_auto_mod(self):
         while True:
-            # ------------------- Get media_id -------------------
+            # ------------------- Get media_id --------------
             if len(self.media_by_tag) == 0:
                 self.get_media_id_by_tag(random.choice(self.tag_list))
                 self.this_tag_like_count = 0
                 self.max_tag_like_count = random.randint(1, self.max_like_for_one_tag)
-            # ------------------- Like -------------------
+            # ------------------- Like ----------------------
             self.new_auto_mod_like()
-            # ------------------- Follow -------------------
+            # ------------------- Follow --------------------
             self.new_auto_mod_follow()
-            # ------------------- Unfollow -------------------
+            # ------------------- Unfollow ------------------
             self.new_auto_mod_unfollow()
             # ------------------- Comment -------------------
             self.new_auto_mod_comments()
+            #---------------- Check the time ----------------
+            if self.stat_per_hour < time.time():
+                if self.hours_count < self.hour:
+                    print('-'*144)
+                    log_string = 'Stat. of #%i hour: likes- %i / %i, follow- %i / %i, unfollow- %i / %i, comments- %i / %i' %\
+                         (self.hours_count, self.like_counter, self.like_counter_per_hour, self.follow_counter,
+                            self.follow_counter_per_hour, self.unfollow_counter, self.unfollow_counter_per_hour, 
+                            self.comments_counter, self.comments_counter_per_hour)
+                    self.write_log(log_string)
+                    print('-'*144)
+                    # Reset hours counter every hour
+                    self.like_counter_per_hour = 0
+                    self.follow_counter_per_hour = 0
+                    self.unfollow_counter_per_hour = 0
+                    self.comments_counter_per_hour = 0
+
+
+                    
+                    self.hours_count += 1
+                    self.stat_per_hour += 3600
+                else:
+                    self.cleanup()
+                    break
 
             # Bot iteration in 1 sec
-            time.sleep(3)
+            time.sleep(random.randint(3, 5))
             # print("Tic!")
 
     def new_auto_mod_like(self):
         if time.time()>self.next_iteration["Like"] and self.like_per_day!=0 \
-            and len(self.media_by_tag) > 0:
+            and len(self.media_by_tag) > 0 and self.like_counter < 1000:
             # You have media_id to like:
             if self.like_all_exist_media(media_size=1, delay=False):
                 # If like go to sleep:
@@ -430,7 +493,8 @@ class InstaBot:
                 if self.this_tag_like_count >= self.max_tag_like_count:
                     self.media_by_tag = [0]
             # Del first media_id
-            del self.media_by_tag[0]
+            if self.media_by_tag:
+                del self.media_by_tag[0]
 
     def new_auto_mod_follow(self):
         # Append real time value to the bot_follow_list
@@ -440,13 +504,13 @@ class InstaBot:
             self.unfol_counter += 1
 
         if time.time()>self.next_iteration["Follow"] and \
-            self.follow_per_day!=0 and len(self.media_by_tag) > 0:
+            self.follow_per_day!=0 and len(self.media_by_tag) > 0 and \
+            self.media_by_tag[0]["owner"]["id"] != self.user_my_id:
 
             log_string = "Try to follow: %s" % (self.media_by_tag[0]["owner"]["id"])
             self.write_log(log_string)
 
-            if self.follow(self.media_by_tag[0]["owner"]["id"]) != False:
-                
+            if self.follow(self.media_by_tag[0]["owner"]["id"]) != False:                
                 self.next_iteration["Follow"] = time.time() +\
                                                 self.add_time(self.follow_delay)
 
@@ -459,7 +523,7 @@ class InstaBot:
 
                     log_string = "Try to unfollow: %s" % (f[0])
                     self.write_log(log_string)
-
+                    time.sleep(random.randint(4, 7))
                     if self.unfollow(f[0]) != False:
                         self.bot_follow_list.remove(f)
                         self.next_iteration["Unfollow"] = time.time() +\
